@@ -1,0 +1,218 @@
+{
+ "service": "enterprise-simulation-lab",
+ "run": "demo-1",
+ "tokens": {
+  "partner": "atlas-partner-demo",
+  "strategist": "atlas-strategist-demo",
+  "viewer": "atlas-viewer-demo"
+ },
+ "steps": [
+  {
+   "title": "A subscription business",
+   "say": "An invented software company, Brightline, sells three plans (Starter $29, Team $99, Business $399 a month) in eight markets. A strategy team at a consulting firm models it. The simulator builds it with 36 months of history: what billing and the CRM recorded for every cohort of customers (plan, market, tenure band) each month, the price rises the company made, and the competitor's prices scraped from its website. The agents: customer cohorts that cancel or stay, prospect pools that sign up or not, a competitor in each market, and a retention desk with a monthly capacity.",
+   "calls": [
+    {
+     "key": "gen",
+     "as": "strategist",
+     "method": "POST",
+     "path": "/v1/scenarios",
+     "body": {
+      "external_ref": "BRIGHTLINE-2026",
+      "name": "Brightline subscriptions",
+      "generate": {
+       "seed": 18,
+       "customers": 48000
+      }
+     }
+    },
+    {
+     "key": "biz",
+     "as": "viewer",
+     "method": "GET",
+     "path": "/v1/scenarios/{{gen.result.scenario_id}}"
+    }
+   ]
+  },
+  {
+   "title": "Agents calibrated from history",
+   "say": "Each agent's behaviour is fitted to the history, not assumed. Customers: a hazard model of cancellation requests by plan, market and tenure, with our price, the gap to the competitor's price and a notice shock in the month of a rise, whose curvature is uncertain. Prospects: signups against the price gap. The competitor: how often it answered one of our rises with a discount. The management team raised prices where customers were loyal, so a spreadsheet comparing markets concludes that higher prices go with lower churn; market effects take that out. The world the history came from is shown alongside; the fits never see it.",
+   "calls": [
+    {
+     "key": "cal",
+     "as": "strategist",
+     "method": "POST",
+     "path": "/v1/scenarios/{{gen.result.scenario_id}}/calibrate",
+     "body": {
+      "note": "36 months to September"
+     }
+    }
+   ]
+  },
+  {
+   "title": "One seeded run",
+   "say": "One run of the calibrated agents through two plans, the status quo and a 12% rise with the competitor answering with a 20% discount for three months: the parameters drawn for this run, what every agent did, month by month.",
+   "calls": [
+    {
+     "key": "one",
+     "as": "strategist",
+     "method": "POST",
+     "path": "/v1/runs",
+     "body": {
+      "scenario_id": "{{gen.result.scenario_id}}",
+      "seed": 7,
+      "horizon_months": 12,
+      "arms": [
+       {
+        "name": "Status quo",
+        "price_change": 0,
+        "competitor": "reactive"
+       },
+       {
+        "name": "Price +12%, competitor discounts 20%",
+        "price_change": 0.12,
+        "month": 1,
+        "competitor": "discount",
+        "discount": 0.2,
+        "discount_start": 2,
+        "discount_months": 3
+       }
+      ]
+     }
+    },
+    {
+     "key": "oneev",
+     "as": "viewer",
+     "method": "GET",
+     "path": "/v1/runs/{{one.run_id}}/events?arm=1"
+    }
+   ]
+  },
+  {
+   "title": "10,000 seeded scenarios",
+   "say": "Three arms, the status quo, a 12% rise with the competitor behaving as calibrated, and a 12% rise with the competitor discounting 20% for three months, each through 10,000 scenarios. Every scenario has its own seed and draws its own parameters from the calibration's uncertainty, so the spread covers what the history cannot pin down as well as luck. All arms of a scenario share its draws, so the change against the status quo is paired. Alongside: the spreadsheet a finance team would build, and the true world.",
+   "calls": [
+    {
+     "key": "batch",
+     "as": "strategist",
+     "method": "POST",
+     "path": "/v1/experiments/batch",
+     "body": {
+      "scenario_id": "{{gen.result.scenario_id}}",
+      "name": "Price +12% for 2027",
+      "runs": 10000,
+      "seed": 2026,
+      "horizon_months": 12,
+      "arms": [
+       {
+        "name": "Status quo",
+        "price_change": 0,
+        "competitor": "reactive"
+       },
+       {
+        "name": "Price +12%",
+        "price_change": 0.12,
+        "month": 1,
+        "competitor": "reactive"
+       },
+       {
+        "name": "Price +12%, competitor discounts 20%",
+        "price_change": 0.12,
+        "month": 1,
+        "competitor": "discount",
+        "discount": 0.2,
+        "discount_start": 2,
+        "discount_months": 3
+       }
+      ]
+     }
+    },
+    {
+     "key": "dist",
+     "as": "viewer",
+     "method": "GET",
+     "path": "/v1/experiments/{{batch.result.experiment_id}}/distributions?outliers=6"
+    }
+   ]
+  },
+  {
+   "title": "Replay an outlier exactly",
+   "say": "The worst scenario for the discount arm is replayed from its stored seed and the policy version it ran with. Nothing else is stored about it, yet the replay reproduces it bit for bit, and this time every event is recorded, so you can see why it went badly.",
+   "calls": [
+    {
+     "key": "replay",
+     "as": "strategist",
+     "method": "POST",
+     "path": "/v1/runs/{{dist.outliers.0.run_id}}/replay",
+     "body": {
+      "note": "worst case of the discount arm"
+     }
+    },
+    {
+     "key": "rev",
+     "as": "viewer",
+     "method": "GET",
+     "path": "/v1/runs/{{replay.run_id}}/events?arm=2"
+    }
+   ]
+  },
+  {
+   "title": "What the answer depends on",
+   "say": "Global sensitivity analysis on the revenue change from a 12% rise: seven uncertain inputs varied together across their ranges, 9,216 runs, Sobol first-order and total indices. Then a quadratic surrogate is fitted to half the runs and scored on the other half, to see whether it could stand in for the simulator.",
+   "calls": [
+    {
+     "key": "sens",
+     "as": "strategist",
+     "method": "POST",
+     "path": "/v1/experiments/{{batch.result.experiment_id}}/sensitivity",
+     "body": {
+      "base_samples": 1024,
+      "arm": 1
+     }
+    }
+   ]
+  },
+  {
+   "title": "A decision, and who signs it",
+   "say": "The policy turns the distributions into a recommendation with its evidence: adopt, reject, or abstain and send to review. It abstains when the plan goes beyond what the history has seen. The strategist who proposed it cannot sign it off; a partner can. Every step is in a hash-chained audit log.",
+   "calls": [
+    {
+     "key": "prop",
+     "as": "strategist",
+     "method": "POST",
+     "path": "/v1/experiments/{{batch.result.experiment_id}}/decision",
+     "body": {
+      "arm": 1,
+      "note": "Board asked for a 2027 price proposal"
+     }
+    },
+    {
+     "key": "self",
+     "expect_error": true,
+     "as": "strategist",
+     "method": "POST",
+     "path": "/v1/experiments/{{batch.result.experiment_id}}/decision/approve",
+     "body": {
+      "final_outcome": "adopt",
+      "note": "approving my own proposal"
+     }
+    },
+    {
+     "key": "approve",
+     "as": "partner",
+     "method": "POST",
+     "path": "/v1/experiments/{{batch.result.experiment_id}}/decision/approve",
+     "body": {
+      "final_outcome": "staged_test",
+      "note": "Not company-wide. +12% in two markets for one quarter, to measure the notice shock and the competitor's answer before deciding"
+     }
+    },
+    {
+     "key": "audit",
+     "as": "partner",
+     "method": "GET",
+     "path": "/v1/audit?limit=14"
+    }
+   ]
+  }
+ ]
+}
